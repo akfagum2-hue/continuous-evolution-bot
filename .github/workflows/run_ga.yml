@@ -2,7 +2,7 @@ name: Continuous GA Search
 
 on:
   schedule:
-    - cron: '0 * * * *' # Automatically runs at the start of every hour
+    - cron: '*/30 * * * *' # Automatically runs every 30 minutes
   workflow_dispatch: # Allows you to click a button in GitHub to start it manually
 
 jobs:
