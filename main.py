@@ -6,12 +6,15 @@ import numpy as np
 @dataclass
 class Config:
     m: int = 167
-    n: int = 668  # 4 sequences * 167
+    n: int = 668  
     population_size: int = 256
     elite_fraction: float = 0.10
-    base_mutation_rate: float = 0.015  # Starting mutation rate
+    base_mutation_rate: float = 0.015  
     crossover_rate: float = 0.80
-    generations: int = 20000
+    
+    # CHANGE THIS FROM 20000 TO 50000
+    generations: int = 50000  
+    
     target_energy: float = 0.0
     seed: int = 1337
 
