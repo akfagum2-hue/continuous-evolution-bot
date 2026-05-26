@@ -34,7 +34,7 @@ class Config:
 
     # RESUME & ACTION TIME BUDGET
     resume_from_disk: bool = True
-    max_runtime_seconds: int = 1600  # Set slightly under 30 mins to finish and cache safely
+    max_runtime_seconds: int = 1200  # Set slightly under 30 mins to finish and cache safely
 
 
 CFG = Config()
