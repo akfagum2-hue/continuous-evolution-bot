@@ -11,7 +11,7 @@ class Config:
     elite_fraction: float = 0.10
     base_mutation_rate: float = 0.015  
     crossover_rate: float = 0.80
-    generations: int = 50000  # Upgraded to run longer per batch
+    generations: int = 50000  # High limit, safety timer will catch it
     target_energy: float = 0.0
     seed: int = 1337
 
@@ -21,8 +21,8 @@ class Config:
     cooling_alpha: float = 0.9975
 
     # EXTINCTION EVENT
-    stagnation_limit: int = 50
-    catastrophic_flip_fraction: float = 0.60  
+    stagnation_limit: int = 30  # Shorter wait time to react faster
+    catastrophic_flip_fraction: float = 0.90  # Heavy 90% wipeout to break traps
 
     # RESUME & ACTION TIME BUDGET
     resume_from_disk: bool = True
@@ -45,7 +45,6 @@ def run_genetic_algorithm():
     config = Config()
     np.random.seed(config.seed)
 
-    # 1. LOAD PREVIOUS PROGRESS OR INITIALIZE
     file_name = "best_sequences.npy"
     if config.resume_from_disk and os.path.exists(file_name):
         print(f"Loading existing checkpoint: {file_name}")
@@ -55,7 +54,7 @@ def run_genetic_algorithm():
         population[mask] *= -1
         population[0] = best_matrix  
     else:
-        print("No checkpoint found. Initializing random population...")
+        print("No checkpoint found or starting fresh. Initializing random population...")
         population = np.random.choice([-1, 1], size=(config.population_size, 4, config.m)).astype(np.int8)
 
     energies, max_deviations = calculate_energy(population)
@@ -67,7 +66,6 @@ def run_genetic_algorithm():
     temperature = config.initial_temperature
     num_elites = max(2, int(config.population_size * config.elite_fraction))
 
-    # 2. MAIN EVOLUTION LOOP
     for gen in range(config.generations):
         if time.time() - start_time > config.max_runtime_seconds:
             print(f"\n[TIME LIMIT] Stopping loop at {config.max_runtime_seconds}s to save progress!")
@@ -92,8 +90,8 @@ def run_genetic_algorithm():
             scale_factor = 1.0 + (stagnation_counter / 10.0)
             current_mutation_rate = config.base_mutation_rate * scale_factor
         
-        if current_mutation_rate > 0.05:
-            current_mutation_rate = 0.05
+        if current_mutation_rate > 0.25:  # Higher cap to allow escape
+            current_mutation_rate = 0.25
 
         if gen % 20 == 0:
             print(f"[GEN {gen:06d}] E={energies[0]:.4f} maxdev={max_deviations[0]:.4f} T={temperature:.4f} mut={current_mutation_rate:.6f} stagnation={stagnation_counter}")
@@ -104,15 +102,15 @@ def run_genetic_algorithm():
 
         # EXTINCTION EVENT
         if stagnation_counter >= config.stagnation_limit:
-            print("\n============================================================")
-            print("EXTINCTION EVENT TRIGGERED - SHAKING UP POPULATION")
-            print("============================================================")
+            print("\n" + "="*60)
+            print("EXTINCTION EVENT TRIGGERED - SMASHING THE POPULATION")
+            print("="*60)
             scramble_mask = np.random.rand(*population[num_elites:].shape) < config.catastrophic_flip_fraction
             population[num_elites:][scramble_mask] *= -1
             stagnation_counter = 0
             temperature = config.initial_temperature  
 
-        # 3. BREEDING (Vectorized Operations)
+        # BREEDING
         new_population = np.empty_like(population)
         new_population[:num_elites] = population[:num_elites]  
 
@@ -126,7 +124,6 @@ def run_genetic_algorithm():
         parents1 = population[parent1_idx]
         parents2 = population[parent2_idx]
 
-        # Vectorized Ring Crossover
         crossover_mask = np.random.rand(children_needed, 1, 1) < config.crossover_rate
         cutoff_points = np.random.randint(0, config.m, size=(children_needed, 1, 1))
         idx_matrix = np.arange(config.m).reshape(1, 1, config.m)
@@ -136,7 +133,6 @@ def run_genetic_algorithm():
         
         children = np.where(crossover_filter, parents1, parents2)
 
-        # Dynamic Vectorized Mutation
         mutation_mask = np.random.rand(*children.shape) < current_mutation_rate
         children[mutation_mask] *= -1
 
@@ -146,7 +142,6 @@ def run_genetic_algorithm():
         energies, max_deviations = calculate_energy(population)
         temperature = max(config.final_temperature, temperature * config.cooling_alpha)
 
-    # 4. FINAL CLEANUP AND EXPORT
     print(f"\nSearch batch completed in {time.time() - start_time:.2f} sec")
     print(f"Current Best Energy = {global_best_energy:.6f}")
     np.save(file_name, global_best_matrix)
