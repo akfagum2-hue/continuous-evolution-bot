@@ -1,23 +1,15 @@
-from __future__ import annotations
-
 import os
 import time
-import random
-import numpy as np
-
 from dataclasses import dataclass
-
-# ============================================================
-# CONFIG
-# ============================================================
+import numpy as np
 
 @dataclass
 class Config:
     m: int = 167
-    n: int = 668
+    n: int = 668  # 4 sequences * 167
     population_size: int = 256
     elite_fraction: float = 0.10
-    base_mutation_rate: float = 0.003
+    base_mutation_rate: float = 0.015  # Starting mutation rate
     crossover_rate: float = 0.80
     generations: int = 20000
     target_energy: float = 0.0
@@ -30,11 +22,160 @@ class Config:
 
     # EXTINCTION EVENT
     stagnation_limit: int = 50
-    catastrophic_flip_fraction: float = 0.30
+    catastrophic_flip_fraction: float = 0.60  # Aggressive shake-up
 
     # RESUME & ACTION TIME BUDGET
     resume_from_disk: bool = True
-    max_runtime_seconds: int = 1200  # Set slightly under 30 mins to finish and cache safely
+    max_runtime_seconds: int = 1200  # 20 minutes for GitHub Actions
+
+def calculate_energy(population):
+    """
+    Uses vectorized NumPy FFT to find the Auto-Correlation Function (PAF)
+    and calculate the energy of the entire population at once.
+    """
+    # population shape: (pop_size, 4, m)
+    # Compute FFT along the last axis (the sequences)
+    fft_vals = np.fft.fft(population, axis=-1)
+    paf = np.real(np.fft.ifft(np.abs(fft_vals)**2, axis=-1))
+    
+    # Sum the PAF values across all 4 sequences
+    total_paf = np.sum(paf, axis=1)
+    
+    # The objective is to make total_paf equal to 4 at all points except index 0
+    # Energy is the sum of squared deviations from this target
+    target = 4.0
+    errors = total_paf[:, 1:] - target
+    energy = np.sum(errors**2, axis=-1)
+    
+    # Calculate max deviation for tracking progress
+    max_dev = np.max(np.abs(errors), axis=-1)
+    return energy, max_dev
+
+def run_genetic_algorithm():
+    start_time = time.time()
+    config = Config()
+    np.random.seed(config.seed)
+
+    # 1. LOAD PREVIOUS PROGRESS OR INITIALIZE NEW POPULATION
+    file_name = "best_sequences.npy"
+    if config.resume_from_disk and os.path.exists(file_name):
+        print(f"Loading existing checkpoint: {file_name}")
+        best_matrix = np.load(file_name)
+        # Fill population by slightly mutating the best found matrix
+        population = np.tile(best_matrix, (config.population_size, 1, 1))
+        mask = np.random.rand(*population.shape) < 0.05
+        population[mask] *= -1
+        population[0] = best_matrix  # Keep exact clone as index 0
+    else:
+        print("No checkpoint found. Initializing random population...")
+        population = np.random.choice([-1, 1], size=(config.population_size, 4, config.m)).astype(np.int8)
+
+    energies, max_deviations = calculate_energy(population)
+    best_idx = np.argmin(energies)
+    global_best_energy = energies[best_idx]
+    global_best_matrix = population[best_idx].copy()
+
+    stagnation_counter = 0
+    temperature = config.initial_temperature
+    num_elites = int(config.population_size * config.elite_fraction)
+
+    # 2. MAIN EVOLUTION LOOP
+    for gen in range(config.generations):
+        # Safety Check: Stop if running out of GitHub Actions time budget
+        if time.time() - start_time > config.max_runtime_seconds:
+            print(f"Time budget of {config.max_runtime_seconds}s reached. Stopping loop.")
+            break
+
+        # Sort population by lowest energy (best fitness)
+        sort_indices = np.argsort(energies)
+        population = population[sort_indices]
+        energies = energies[sort_indices]
+        max_deviations = max_deviations[sort_indices]
+
+        # Track global improvements
+        if energies[0] < global_best_energy:
+            global_best_energy = energies[0]
+            global_best_matrix = population[0].copy()
+            stagnation_counter = 0
+            # Automatically save any new discovery straight to disk
+            np.save(file_name, global_best_matrix)
+        else:
+            stagnation_counter += 1
+
+        # Print status updates every 10 generations
+        if gen % 10 == 0:
+            print(f"[GEN {gen:06d}] E={energies[0]:.6f} maxdev={max_deviations[0]:.6f} T={temperature:.6f} mut={config.base_mutation_rate * (1.0 + (stagnation_counter / 10.0)):.8f} stagnation={stagnation_counter}")
+
+        # Target found check
+        if global_best_energy <= config.target_energy:
+            print(f"SUCCESS! Target energy reached at Generation {gen}!")
+            break
+
+        # EXTINCTION EVENT (If stuck for too long)
+        if stagnation_counter >= config.stagnation_limit:
+            print("============================================================")
+            print("EXTINCTION EVENT TRIGGERED - SHAKING UP POPULATION")
+            print("============================================================")
+            # Keep elite, heavily scramble the rest of the population
+            scramble_mask = np.random.rand(*population[num_elites:].shape) < config.catastrophic_flip_fraction
+            population[num_elites:][scramble_mask] *= -1
+            stagnation_counter = 0
+            temperature = config.initial_temperature  # Reset annealing heat
+
+        # AUTOMATED DYNAMIC MUTATION RATE CALCULATIONS
+        current_mutation_rate = config.base_mutation_rate
+        if stagnation_counter > 0:
+            # Scale mutation rate up dynamically based on how long it's been stuck
+            scale_factor = 1.0 + (stagnation_counter / 10.0)
+            current_mutation_rate = config.base_mutation_rate * scale_factor
+        
+        # Keep mutation capped so it doesn't break into pure random chaos
+        if current_mutation_rate > 0.05:
+            current_mutation_rate = 0.05
+
+        # 3. BREEDING NEW GENERATION (Vectorized Operations)
+        new_population = np.empty_index = np.empty_like(population)
+        new_population[:num_elites] = population[:num_elites]  # Elitism
+
+        # Selection using simulated annealing probabilities
+        weights = np.exp(-energies / temperature)
+        probabilities = weights / np.sum(weights)
+        
+        parent1_idx = np.random.choice(config.population_size, size=config.population_size - num_elites, p=probabilities)
+        parent2_idx = np.random.choice(config.population_size, size=config.population_size - num_elites, p=probabilities)
+        
+        parents1 = population[parent1_idx]
+        parents2 = population[parent2_idx]
+
+        # Vectorized Ring Crossover
+        crossover_mask = np.random.rand(config.population_size - num_elites, 1, 1) < config.crossover_rate
+        cutoff_points = np.random.randint(0, config.m, size=(config.population_size - num_elites, 1, 1))
+        idx_matrix = np.arange(config.m).reshape(1, 1, config.m)
+        
+        left_side = idx_matrix < cutoff_points
+        crossover_filter = crossover_mask & left_side
+        
+        children = np.where(crossover_filter, parents1, parents2)
+
+        # Dynamic Vectorized Mutation
+        mutation_mask = np.random.rand(*children.shape) < current_mutation_rate
+        children[mutation_mask] *= -1
+
+        new_population[num_elites:] = children
+        population = new_population
+
+        # Recalculate energy states for next loop iteration
+        energies, max_deviations = calculate_energy(population)
+        temperature = max(config.final_temperature, temperature * config.cooling_alpha)
+
+    # 4. FINAL CLEANUP AND EXPORT
+    print(f"Search batch completed in {time.time() - start_time:.2f} sec")
+    print(f"Current Best Energy = {global_best_energy:.6f}")
+    np.save(file_name, global_best_matrix)
+    print("Progress safely saved to best_sequences.npy")
+
+if __name__ == "__main__":
+    run_genetic_algorithm()    max_runtime_seconds: int = 1200  # Set slightly under 30 mins to finish and cache safely
 
 
 CFG = Config()
