@@ -5,6 +5,10 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+# FORCES GITHUB TO ALLOW WRITING TO THE REPO
+permissions:
+  contents: write
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -28,10 +32,10 @@ jobs:
       - name: Restore Cached Matrix
         uses: actions/cache@v4
         with:
-          path: best_sequences.npy
-          key: best-sequences-cache-${{ github.run_id }}-${{ github.run_number }}
+          path: best_sequence.npy
+          key: best-sequence-cache-${{ github.run_id }}-${{ github.run_number }}
           restore-keys: |
-            best-sequences-cache-
+            best-sequence-cache-
 
       - name: Run Search Script
         run: python main.py
@@ -39,11 +43,11 @@ jobs:
       - name: Save Updated Progress to Cache
         uses: actions/cache/save@v4
         with:
-          path: best_sequences.npy
+          path: best_sequence.npy
           key: best-sequences-cache-${{ github.run_id }}-${{ github.run_number }}
 
       - name: Commit Changes to Repo (Optional Backup)
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Automated progress update [skip ci]"
-          file_pattern: 'best_sequences.npy'
+          file_pattern: 'best_sequence.npy'
