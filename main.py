@@ -11,7 +11,7 @@ class Config:
     elite_fraction: float = 0.10
     base_mutation_rate: float = 0.015  
     crossover_rate: float = 0.80
-    generations: int = 50000  # High limit, safety timer will catch it
+    generations: int = 50000  # Upgraded to run longer per batch
     target_energy: float = 0.0
     seed: int = 1337
 
@@ -90,7 +90,7 @@ def run_genetic_algorithm():
             scale_factor = 1.0 + (stagnation_counter / 10.0)
             current_mutation_rate = config.base_mutation_rate * scale_factor
         
-        if current_mutation_rate > 0.25:  # Higher cap to allow escape
+        if current_mutation_rate > 0.25:  
             current_mutation_rate = 0.25
 
         if gen % 20 == 0:
@@ -114,8 +114,15 @@ def run_genetic_algorithm():
         new_population = np.empty_like(population)
         new_population[:num_elites] = population[:num_elites]  
 
-        weights = np.exp(-energies / temperature)
-        probabilities = weights / np.sum(weights)
+        # STABLE PROBABILITY CALCULATION (Fixes the NaN crash)
+        shifted_energies = energies - np.min(energies)
+        weights = np.exp(-shifted_energies / (temperature + 1e-8))
+        sum_weights = np.sum(weights)
+        
+        if sum_weights == 0 or np.isnan(sum_weights):
+            probabilities = np.ones(config.population_size) / config.population_size
+        else:
+            probabilities = weights / sum_weights
         
         children_needed = config.population_size - num_elites
         parent1_idx = np.random.choice(config.population_size, size=children_needed, p=probabilities)
